@@ -1,0 +1,13 @@
+# Template requirements for imaging ML workflows.
+# Pin exact versions once the method is finalized.
+
+numpy>=1.23
+scipy>=1.9
+pandas>=1.5
+scikit-image>=0.20
+scikit-learn>=1.2
+opencv-python>=4.7
+matplotlib>=3.6
+seaborn>=0.12
+pyyaml>=6.0
+tqdm>=4.65

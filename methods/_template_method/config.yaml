@@ -1,0 +1,69 @@
+project:
+  name: myelin-benchmark
+  method: template_method
+  version: "0.1.0"
+
+paths:
+  data_root: ../../data
+  raw_dir: ../../data/00_raw
+  import_dir: ../../data/01_import
+  metadata_dir: ../../data/02_metadata
+  labels_dir: ../../data/03_labels
+  processed_dir: ../../data/04_processed
+  splits_dir: ../../data/05_splits
+  inference_dir: ../../data/06_inference/template_method
+  output_dir: ./outputs
+  checkpoints_dir: ./checkpoints
+  logs_dir: ../../logs
+
+experiment:
+  seed: 42
+  deterministic: true
+  device: "cuda"
+  gpu_ids: [0]
+  num_workers: 4
+
+model:
+  name: "your_model"
+  backbone: "your_backbone"
+  pretrained: false
+  input_size: [512, 512]
+  num_classes: 2
+
+training:
+  epochs: 100
+  batch_size: 4
+  optimizer:
+    name: "adamw"
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+  scheduler:
+    name: "cosine"
+    warmup_epochs: 5
+  mixed_precision: true
+  gradient_clip: 1.0
+  save_every: 5
+
+augmentation:
+  enabled: true
+  hflip: true
+  vflip: false
+  rotate: [0, 90, 180, 270]
+  normalize: true
+
+evaluation:
+  task_type: "segmentation"  # segmentation | classification | regression
+  metrics: ["dice", "iou", "precision", "recall"]
+  threshold: 0.5
+  save_visuals: true
+
+inference:
+  checkpoint_path: ./checkpoints/best.ckpt
+  tta: false
+  batch_size: 2
+
+logging:
+  use_tensorboard: true
+  use_wandb: false
+  wandb_project: "myelin-benchmark"
+  notes: ""

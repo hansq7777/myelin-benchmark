@@ -30,7 +30,7 @@
    - 训练/验证划分必须按 **stack（或 animal/batch）分组**，禁止按 slice 随机打散。
    - 划分文件固定：`data/05_splits/nnunet_Dataset001_20241206_MyelinConfData_splits.json`。
    - 划分脚本固定 seed（当前：`42`），任何更改必须写入 Lab Report 并在变更说明中标注。
-   - 当前固定规则：验证集不使用 `PIG_INTERFACE_S00`。
+   - 当前固定规则：按 stack 分组 **4-fold（leave-one-stack-out）** 划分。
    - 训练若需保持可比性，必须保证 **同一 split、同一 seed、同一训练轮数/早停策略**。
    - 若计划同时改动多个因素（例如增强 + loss + trainer），必须先确认是否允许混合改动。
 

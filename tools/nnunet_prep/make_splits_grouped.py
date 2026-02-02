@@ -15,7 +15,8 @@ SPLITS_DIR.mkdir(parents=True, exist_ok=True)
 
 SEED = 42
 TRAIN_RATIO = 0.8
-EXCLUDE_FROM_VAL = {"PIG_INTERFACE_S00"}
+N_SPLITS = 4  # use leave-one-stack-out when N_SPLITS >= number of stacks
+EXCLUDE_FROM_VAL = set()
 
 
 def case_to_group(case_id: str) -> str:
@@ -37,20 +38,33 @@ def main() -> None:
     rng.shuffle(group_ids)
 
     n_groups = len(group_ids)
-    n_train = max(1, int(round(n_groups * TRAIN_RATIO)))
 
     candidates = [g for g in group_ids if g not in EXCLUDE_FROM_VAL]
     if len(candidates) == 0:
         raise RuntimeError("No candidates available for validation split after exclusions.")
-    val_group = rng.choice(candidates)
-    val_groups = {val_group}
 
-    train_groups = set([g for g in group_ids if g != val_group])
-
-    train_ids = sorted([cid for cid in case_ids if case_to_group(cid) in train_groups])
-    val_ids = sorted([cid for cid in case_ids if case_to_group(cid) in val_groups])
-
-    splits = [{"train": train_ids, "val": val_ids}]
+    splits = []
+    fold_groups = []
+    if N_SPLITS >= n_groups:
+        # leave-one-stack-out
+        for val_group in group_ids:
+            if val_group in EXCLUDE_FROM_VAL:
+                continue
+            train_groups = [g for g in group_ids if g != val_group]
+            train_ids = sorted([cid for cid in case_ids if case_to_group(cid) in train_groups])
+            val_ids = sorted([cid for cid in case_ids if case_to_group(cid) == val_group])
+            splits.append({"train": train_ids, "val": val_ids})
+            fold_groups.append({"train_stacks": train_groups, "val_stacks": [val_group]})
+    else:
+        n_train = max(1, int(round(n_groups * TRAIN_RATIO)))
+        rng.shuffle(group_ids)
+        val_group = rng.choice(candidates)
+        val_groups = {val_group}
+        train_groups = set([g for g in group_ids if g != val_group])
+        train_ids = sorted([cid for cid in case_ids if case_to_group(cid) in train_groups])
+        val_ids = sorted([cid for cid in case_ids if case_to_group(cid) in val_groups])
+        splits = [{"train": train_ids, "val": val_ids}]
+        fold_groups = [{"train_stacks": sorted(train_groups), "val_stacks": sorted(val_groups)}]
 
     with open(DATASET_DIR / "splits_final.json", "w", encoding="utf-8") as f:
         json.dump(splits, f, indent=2)
@@ -67,16 +81,17 @@ def main() -> None:
             {
                 "seed": SEED,
                 "train_ratio": TRAIN_RATIO,
-                "train_stacks": sorted(train_groups),
-                "val_stacks": sorted(val_groups),
+                "n_splits": N_SPLITS,
+                "exclude_from_val": sorted(EXCLUDE_FROM_VAL),
                 "n_stacks": n_groups,
+                "folds": fold_groups,
             },
             f,
             indent=2,
         )
 
-    print(f"Stacks total: {n_groups}, train: {len(train_groups)}, val: {len(val_groups)}")
-    print(f"Cases total: {len(case_ids)}, train: {len(train_ids)}, val: {len(val_ids)}")
+    print(f"Stacks total: {n_groups}, folds: {len(splits)}")
+    print(f"Cases total: {len(case_ids)}")
 
 
 if __name__ == "__main__":

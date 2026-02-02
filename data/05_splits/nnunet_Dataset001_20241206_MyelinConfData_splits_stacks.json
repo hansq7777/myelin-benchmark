@@ -1,13 +1,49 @@
 {
   "seed": 42,
   "train_ratio": 0.8,
-  "train_stacks": [
-    "PIG_INTERFACE_S00",
-    "S1BF_S19",
-    "S1BF_S26"
-  ],
-  "val_stacks": [
-    "S1BF_S24"
-  ],
-  "n_stacks": 4
+  "n_splits": 4,
+  "exclude_from_val": [],
+  "n_stacks": 4,
+  "folds": [
+    {
+      "train_stacks": [
+        "S1BF_S19",
+        "S1BF_S26",
+        "PIG_INTERFACE_S00"
+      ],
+      "val_stacks": [
+        "S1BF_S24"
+      ]
+    },
+    {
+      "train_stacks": [
+        "S1BF_S24",
+        "S1BF_S26",
+        "PIG_INTERFACE_S00"
+      ],
+      "val_stacks": [
+        "S1BF_S19"
+      ]
+    },
+    {
+      "train_stacks": [
+        "S1BF_S24",
+        "S1BF_S19",
+        "PIG_INTERFACE_S00"
+      ],
+      "val_stacks": [
+        "S1BF_S26"
+      ]
+    },
+    {
+      "train_stacks": [
+        "S1BF_S24",
+        "S1BF_S19",
+        "S1BF_S26"
+      ],
+      "val_stacks": [
+        "PIG_INTERFACE_S00"
+      ]
+    }
+  ]
 }

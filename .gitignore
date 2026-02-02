@@ -1,0 +1,31 @@
+# OS / editor
+.DS_Store
+
+# Microscopy / image data (do not upload)
+*.czi
+*.ome.tif
+*.ome.tiff
+*.tif
+*.tiff
+*.TIF
+*.TIFF
+
+# Model artifacts / checkpoints (do not upload)
+methods/**/checkpoints/
+methods/**/checkpoint/
+methods/**/weights/
+methods/**/models/
+methods/**/artifacts/
+methods/**/runs/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.hdf5
+*.pb
+*.pkl
+*.joblib
+*.safetensors
+
+# Note: log files are intentionally NOT ignored

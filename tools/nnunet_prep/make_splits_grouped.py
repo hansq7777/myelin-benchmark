@@ -15,6 +15,7 @@ SPLITS_DIR.mkdir(parents=True, exist_ok=True)
 
 SEED = 42
 TRAIN_RATIO = 0.8
+EXCLUDE_FROM_VAL = {"PIG_INTERFACE_S00"}
 
 
 def case_to_group(case_id: str) -> str:
@@ -37,8 +38,14 @@ def main() -> None:
 
     n_groups = len(group_ids)
     n_train = max(1, int(round(n_groups * TRAIN_RATIO)))
-    train_groups = set(sorted(group_ids[:n_train]))
-    val_groups = set(sorted(group_ids[n_train:]))
+
+    candidates = [g for g in group_ids if g not in EXCLUDE_FROM_VAL]
+    if len(candidates) == 0:
+        raise RuntimeError("No candidates available for validation split after exclusions.")
+    val_group = rng.choice(candidates)
+    val_groups = {val_group}
+
+    train_groups = set([g for g in group_ids if g != val_group])
 
     train_ids = sorted([cid for cid in case_ids if case_to_group(cid) in train_groups])
     val_ids = sorted([cid for cid in case_ids if case_to_group(cid) in val_groups])

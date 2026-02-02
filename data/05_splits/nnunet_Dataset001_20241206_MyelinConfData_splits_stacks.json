@@ -2,12 +2,12 @@
   "seed": 42,
   "train_ratio": 0.8,
   "train_stacks": [
+    "PIG_INTERFACE_S00",
     "S1BF_S19",
-    "S1BF_S24",
     "S1BF_S26"
   ],
   "val_stacks": [
-    "PIG_INTERFACE_S00"
+    "S1BF_S24"
   ],
   "n_stacks": 4
 }

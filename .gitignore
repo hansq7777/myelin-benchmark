@@ -11,6 +11,10 @@
 *.TIFF
 
 # Model artifacts / checkpoints (do not upload)
+methods/**/nnUNet_results/
+methods/**/.venv/
+methods/**/.cache/
+methods/**/.tmp/
 methods/**/checkpoints/
 methods/**/checkpoint/
 methods/**/weights/

@@ -35,3 +35,12 @@ methods/<method_name>/
 - 报告多指标与统计置信区间（如 Dice/IoU/F1/AUC/MAE）。
 - 报告运行资源（GPU、显存、耗时）。
 - 保存可视化对比与失败样本分析。
+
+## Early Stopping（标准配置）
+默认建议（可在 `config.yaml` 中调整）：
+- `monitor: val_loss`
+- `mode: min`
+- `patience: 20`
+- `min_delta: 0.001`
+- `min_epochs: 30`
+- `cooldown: 5`

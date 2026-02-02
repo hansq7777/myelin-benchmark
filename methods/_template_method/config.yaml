@@ -43,6 +43,14 @@ training:
   mixed_precision: true
   gradient_clip: 1.0
   save_every: 5
+  early_stopping:
+    enabled: true
+    monitor: "val_loss"
+    mode: "min"
+    patience: 20
+    min_delta: 0.001
+    min_epochs: 30
+    cooldown: 5
 
 augmentation:
   enabled: true

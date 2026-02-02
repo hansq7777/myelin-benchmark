@@ -1,0 +1,20 @@
+{
+  "name": "20241206_MyelinConfData",
+  "description": "Myelin confocal pseudo-3D 2D dataset (3-channel sliding window)",
+  "tensorImageSize": "2D",
+  "reference": "",
+  "licence": "",
+  "release": "",
+  "channel_names": {
+    "0": "slice_-1",
+    "1": "slice_0",
+    "2": "slice_+1"
+  },
+  "labels": {
+    "background": 0,
+    "myelin": 1
+  },
+  "numTraining": 210,
+  "numTest": 0,
+  "file_ending": ".tif"
+}

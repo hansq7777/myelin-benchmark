@@ -6,6 +6,7 @@
 - 工作流：`docs/WORKFLOW.md`
 - 目录结构：`docs/STRUCTURE.md`
 - 操作规范：`docs/OPERATION_RULES.md`
+- 项目背景：`docs/PROJECT_CONTEXT_v0.2.md`
 - Lab Report 模板：`notebooks/labreport_template.md`
 
 ## Dependencies & Tools（含版本）

@@ -15,6 +15,13 @@ methods/**/nnUNet_results/
 methods/**/.venv/
 methods/**/.cache/
 methods/**/.tmp/
+tools/**/.venv/
+tools/**/.cache/
+tools/**/.tmp/
+tools/bftools/bftools/
+data/00_raw/nnUNet_raw/**/imagesTr/
+data/00_raw/nnUNet_raw/**/labelsTr/
+data/00_raw/nnUNet_raw/**/imagesTs/
 methods/**/checkpoints/
 methods/**/checkpoint/
 methods/**/weights/

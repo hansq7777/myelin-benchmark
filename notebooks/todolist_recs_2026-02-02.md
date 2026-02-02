@@ -23,3 +23,8 @@
 ## 规模化推理建议
 - 断点续跑 + 批处理流水线。
 - OME-Zarr 作为训练/推理缓存格式（不改变归档格式）。
+
+## 目录脚手架与横向对比
+- 建立并行方法目录：`methods/nnunet_base`, `methods/nnunet_dice_cldice`, `methods/nnunet_trainer_v2`, `methods/nnunet_aug_zdecay`。
+- 每个方法目录维护独立 `nnUNet_results` 与 `configs/`，共享同一 venv。
+- 在 `results/compare_runs.csv` 记录每次训练指标，便于横向比较。

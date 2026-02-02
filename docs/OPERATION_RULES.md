@@ -26,6 +26,25 @@
    - 通用工具与共享脚本放在 `tools/`（优先）。
    - 评估结果统一写入 `results/`（如 `summary.csv`）。
 
+5. **划分与随机性（强制）**
+   - 训练/验证划分必须按 **stack（或 animal/batch）分组**，禁止按 slice 随机打散。
+   - 划分文件固定：`data/05_splits/nnunet_Dataset001_20241206_MyelinConfData_splits.json`。
+   - 划分脚本固定 seed（当前：`42`），任何更改必须写入 Lab Report 并在变更说明中标注。
+   - 训练若需保持可比性，必须保证 **同一 split、同一 seed、同一训练轮数/早停策略**。
+   - 若计划同时改动多个因素（例如增强 + loss + trainer），必须先确认是否允许混合改动。
+
+   **同一 seed 的建议做法（记录在 Lab Report）**
+   - 运行前固定：`PYTHONHASHSEED=42`。
+   - 训练脚本中固定：`random.seed(42)`, `np.random.seed(42)`, `torch.manual_seed(42)`,
+     `torch.cuda.manual_seed_all(42)`。
+   - 若需要严格可复现：设置 `torch.backends.cudnn.deterministic=True` 且 `benchmark=False`
+     （可能显著减速）。默认 nnUNet 会启用 `cudnn.benchmark=True`，因此完全确定性并非默认保证。
+
+6. **实验可比性（强制）**
+   - 除非是对比不同策略本身（例如不同 trainer/增强），否则 **主要参数必须保持一致**：
+     - 数据划分、训练轮数/早停、batch size、patch size、网络结构、预处理与推理设置。
+   - 所有差异必须在 Lab Report 中显式记录。
+
 ## Lab Report 要求（强制）
 **每次完成以下任意操作后，必须写一份 Lab Report：**
 - 分析（analysis）

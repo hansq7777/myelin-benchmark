@@ -1,0 +1,98 @@
+diff --git a/nnunetv2/run/run_training.py b/nnunetv2/run/run_training.py
+index 2748d05..57b0492 100644
+--- a/nnunetv2/run/run_training.py
++++ b/nnunetv2/run/run_training.py
+@@ -250,6 +250,21 @@ def run_training_entry():
+                          "Use CUDA_VISIBLE_DEVICES=X nnUNetv2_train [...] instead!")
+     args = parser.parse_args()
+ 
++    seed_env = os.environ.get("NNUNET_SEED")
++    if seed_env is not None:
++        try:
++            seed = int(seed_env)
++            import random
++            import numpy as np
++            random.seed(seed)
++            np.random.seed(seed)
++            torch.manual_seed(seed)
++            if torch.cuda.is_available():
++                torch.cuda.manual_seed_all(seed)
++            print(f"NNUNET_SEED set to {seed}")
++        except ValueError:
++            print(f"NNUNET_SEED is not a valid int: {seed_env}")
++
+     assert args.device in ['cpu', 'cuda', 'mps'], f'-device must be either cpu, mps or cuda. Other devices are not tested/supported. Got: {args.device}.'
+     if args.device == 'cpu':
+         # let's allow torch to use hella threads
+diff --git a/nnunetv2/training/nnUNetTrainer/nnUNetTrainer.py b/nnunetv2/training/nnUNetTrainer/nnUNetTrainer.py
+index 91febaa..016b301 100644
+--- a/nnunetv2/training/nnUNetTrainer/nnUNetTrainer.py
++++ b/nnunetv2/training/nnUNetTrainer/nnUNetTrainer.py
+@@ -187,6 +187,19 @@ class nnUNetTrainer(object):
+         self.save_every = 50
+         self.disable_checkpointing = False
+ 
++        # Early stopping (default for all trainers; can be overridden in subclasses)
++        self.early_stop_enabled = True
++        self.early_stop_metric = 'val_losses'  # options: 'val_losses', 'ema_fg_dice'
++        self.early_stop_mode = 'min'  # 'min' for loss, 'max' for dice
++        self.early_stop_patience = 20
++        self.early_stop_min_delta = 0.001
++        self.early_stop_min_epochs = 30
++        self.early_stop_cooldown = 5
++        self._early_stop_best = None
++        self._early_stop_bad_epochs = 0
++        self._early_stop_cooldown_counter = 0
++        self._early_stop_triggered = False
++
+         self.was_initialized = False
+ 
+         self.print_to_log_file("\n#######################################################################\n"
+@@ -1146,6 +1159,39 @@ class nnUNetTrainer(object):
+ 
+         self.current_epoch += 1
+ 
++        # Early stopping check
++        if self.early_stop_enabled and not self._early_stop_triggered:
++            if self.current_epoch >= self.early_stop_min_epochs:
++                metric_values = self.logger.my_fantastic_logging.get(self.early_stop_metric, [])
++                if len(metric_values) > 0:
++                    current_metric = metric_values[-1]
++                    improved = False
++                    if self._early_stop_best is None:
++                        improved = True
++                    elif self.early_stop_mode == 'min':
++                        improved = current_metric < (self._early_stop_best - self.early_stop_min_delta)
++                    else:
++                        improved = current_metric > (self._early_stop_best + self.early_stop_min_delta)
++
++                    if improved:
++                        self._early_stop_best = current_metric
++                        self._early_stop_bad_epochs = 0
++                        self._early_stop_cooldown_counter = self.early_stop_cooldown
++                    else:
++                        if self._early_stop_cooldown_counter > 0:
++                            self._early_stop_cooldown_counter -= 1
++                        else:
++                            self._early_stop_bad_epochs += 1
++
++                    if self._early_stop_bad_epochs >= self.early_stop_patience:
++                        self._early_stop_triggered = True
++                        self.print_to_log_file(
++                            f"Early stopping triggered at epoch {self.current_epoch - 1} "
++                            f"(metric={self.early_stop_metric}, best={self._early_stop_best}, "
++                            f"patience={self.early_stop_patience})",
++                            also_print_to_console=True
++                        )
++
+     def save_checkpoint(self, filename: str) -> None:
+         if self.local_rank == 0:
+             if not self.disable_checkpointing:
+@@ -1383,5 +1429,7 @@ class nnUNetTrainer(object):
+                 self.on_validation_epoch_end(val_outputs)
+ 
+             self.on_epoch_end()
++            if self._early_stop_triggered:
++                break
+ 
+         self.on_train_end()

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Project root
-ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
-METHOD_DIR=$(cd "$(dirname "$0")" && pwd)
+# Project root (robust when sourced from any shell)
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR=$(cd "$(dirname "$SCRIPT_PATH")" && pwd)
+ROOT_DIR=$(cd "${SCRIPT_DIR}/../.." && pwd)
+METHOD_DIR="${SCRIPT_DIR}"
 
 # nnUNet v2 required environment variables
 export nnUNet_raw="${ROOT_DIR}/data/00_raw/nnUNet_raw"

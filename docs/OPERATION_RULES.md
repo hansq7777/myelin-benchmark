@@ -11,6 +11,10 @@
    - 处理后的统一格式数据放入 `data/04_processed/`。
    - 训练/验证/测试划分固定存放于 `data/05_splits/`。
    - 预测输出结果统一写入 `data/06_inference/`。
+   - 推理完成后必须将逐 slice 预测 **重建为 zstack OME‑TIFF**，与原始数据元信息对齐。
+     - 写入原始 OME‑XML（尺寸、分辨率、物镜与采集参数）。
+     - 写入预测元信息（模型名、trainer/plans、推理参数、dz 重采样、commit/seed）。
+     - 若无法直接写入 OME‑XML，必须生成 sidecar JSON 并与输出 zstack 同名保存。
 
 2. **方法接入**
    - 每个方法必须放在 `methods/<method_name>/`。

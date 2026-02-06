@@ -1,6 +1,6 @@
-# nnUNet Dice + clDice Variant
+# nnUNet Dice + clDice Variant (High-res only)
 
-- Purpose: Custom loss to encourage line-like continuity (Dice/CE + 0.3 * clDice)
+- Purpose: Custom loss to encourage line-like continuity (Dice/CE + 0.3 * clDice), applied only to highest-resolution output
 - Env: shared venv at `methods/nnunet/.venv`
 - Results: `methods/nnunet_dice_cldice/nnUNet_results`
 

@@ -84,9 +84,15 @@ data/05_splits/
 1. 数据整理：`scripts/prepare_data.py`
 2. 生成固定分割：`scripts/make_splits.py`
 3. 逐方法训练与推理：`methods/<method>/run_train.sh` + `run_infer.sh`
-4. **推理后重建 zstack**：将逐 slice 预测重组为 zstack OME‑TIFF，并写入：
+4. **推理前一致性检查（强制）**：
+   - 核对 dz/分辨率是否与训练一致（必要时先重采样）。
+   - 核对通道数与命名（_0000…）是否符合模型输入。
+   - 核对文件后缀与 dataset.json 一致。
+   - 统计 case 数量与来源，记录到 manifest。
+   - **如发现不一致，必须先询问确认再继续推理。**
+5. **推理后重建 zstack**：将逐 slice 预测重组为 zstack OME‑TIFF，并写入：
    - 原始 OME‑XML 元信息（影像尺寸/分辨率/物镜/采集信息）
    - 预测元信息（模型名、trainer/plans、推理设置、dz 重采样参数、commit/seed）
    - 运行摘要（日期、输入来源、样本数、异常与跳过清单）
-5. 统一评估：`scripts/eval_all.py`
-6. 汇总与统计：`analysis/compare_methods.py`
+6. 统一评估：`scripts/eval_all.py`
+7. 汇总与统计：`analysis/compare_methods.py`

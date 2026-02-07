@@ -10,6 +10,7 @@
 
 - 2D 层面髓鞘线状结构分割（mask）为主，后续扩展到 2D centerline。
 - 2D/2.5D 预测结果的跨层融合与 3D 重建（结构段、方向分布、长度/密度统计）。
+- 在追踪与重建阶段优先得到“允许短 gap、但单根不分叉”的轨迹表示（用于后续定量）。
 - 对 Z 向信号衰减、浅层遮挡深层、两类伪影（染色伪影/散射噪声）具备鲁棒性。
 
 ### 不在范围（当前阶段）
@@ -160,6 +161,25 @@
 - 伪标签迭代（高置信区域扩标）。
 - 主动学习（挑选最不确定/最能提升泛化的 slice 让人标注）。
 
+### 4.5 单根无分叉追踪（DBT/后处理）目标
+
+目标：在可见范围内尽量恢复每根髓鞘的连续轨迹，用于逐根统计；允许短 gap，禁止生成生物学上不可信的分叉。
+
+- 分叉消解：在 skeleton -> SWC 前，对交叉/贴靠区域按方向连续性做配对，仅保留单根延伸关系。
+- 端点桥接：仅允许端点-端点连接，不在中段强行连线；桥接必须同时满足 `distance(um)`、`direction consistency`、`radius similarity`。
+- 概率约束：可选要求桥接路径在 `pro.lab` 上保持连续高响应，低响应路径不桥接。
+- 短 gap 限制：桥接阈值用 um 配置并版本化记录，超过阈值保持断开。
+- 结果分离：后处理结束后输出 `track_id` 级别结果，确保可按“单根线性结构”做统计分析。
+
+建议最小统计字段：
+
+- `track_id`、`num_nodes`、`length_um`、`mean_radius_um`、`start_xyz`、`end_xyz`、`gap_bridge_count`、`source_model`、`source_case_id`。
+
+说明：
+
+- `pro.lab` 是追踪可通行概率场，`mask` 是结构占据区域，两者职责不同，不应直接等价替换。
+- 该目标主要作用于追踪/后处理阶段，不直接等同于分割网络损失函数。
+
 ## 5. 评估思路（强调“线状结构 + 3D 连通”而非只看 Dice）
 
 ### 5.1 数据切分原则（避免泄漏）
@@ -218,3 +238,17 @@
 - 默认训练脚本必须覆盖 **fold0–fold3 全部 folds**，且 **只有在存在 `checkpoint_latest` 时才续跑**；若存在 `checkpoint_final` 则视为已完成可跳过。
 - **特殊续跑/跳过策略** 必须使用一次性的脚本（仅针对某个模型或某个 fold），不得改动全局训练脚本，以免影响其他模型的可比性与完整性。
 - 若发现缺失某个 fold（尤其是 fold0），应在当前队列完成后自动补跑，避免“全局脚本改动导致系统性遗漏”。
+
+### 运行监控与故障定位（标准操作）
+
+目标：发生异常时能定位到 **原因、阶段、fold、资源状态、退出码**，避免“无信息中止”。
+
+- **心跳 + 退出码**：训练进程以固定间隔写心跳，记录 PID、耗时、最后日志行；退出时捕获 `SIGTERM/SIGINT/EXIT` 并写 TSV。
+- **错误类型归类**：训练日志按关键字归类（NaN/Inf、OOM、Missing file、RuntimeError 等），写入汇总 TSV。
+- **资源采样**：定期写 `nvidia-smi`、主机内存、进程 RSS、磁盘占用（`df -h`）到独立资源日志，定位 OOM/磁盘压力。
+- **训练侧异常捕获**：dataloader 初始化与训练/验证循环加入 try/except 记录异常；对标签 bin 越界/NaN/Inf 做检查并跳过该 batch；启用 `set_detect_anomaly` 与 `clip_grad_norm_` 降低梯度爆炸。
+- **产物清单**：
+  - 主日志（统一进度）：`logs/deepbranchtracer_4fold_unified_*.log`
+  - 汇总 TSV（状态/错误/退出码/PID）：`logs/deepbranchtracer_4fold_unified_*.tsv`
+  - 资源日志（GPU/内存/RSS/磁盘）：`logs/deepbranchtracer_4fold_resources_*.log`
+  - 单 stage 日志：`logs/deepbranchtracer_fold*_stage*_attempt*.log`

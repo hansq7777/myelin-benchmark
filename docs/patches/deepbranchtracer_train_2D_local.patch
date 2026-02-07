@@ -1,0 +1,1105 @@
+diff --git a/train_2D.py b/train_2D.py
+index 3909f40..55b42e8 100644
+--- a/train_2D.py
++++ b/train_2D.py
+@@ -1,6 +1,8 @@
+ from __future__ import print_function, division
+ import os
+ from os import path
++import csv
++import json
+ import numpy as np
+ from PIL import Image
+ import glob
+@@ -10,6 +12,7 @@ import shutil
+ import random
+ import pickle
+ import copy
++import re
+ 
+ import torch
+ from torch import optim
+@@ -30,6 +33,14 @@ from tools.tracing.tracing_tools_2D import get_pos_image_2d, get_network_predict
+ from tools.Data_Loader_2d import Images_Dataset_folder_2d
+ from tools.Losses import dice_loss, MSE_loss, L1_loss, dice_score, bce_loss_w
+ 
++_CURRENT_CONTEXT = "init"
++
++def _log_exception(context: str, exc: Exception) -> None:
++    try:
++        print(f"[EXCEPTION] context={context} type={type(exc).__name__} msg={exc}")
++    except Exception:
++        pass
++
+ from lib.klib.baseio import *
+ from lib.swclib.swc_io import swc_save_metric, swc_save, read_swc_tree
+ from lib.swclib.swc_tree import SwcTree
+@@ -46,6 +57,16 @@ resize_radio = args.resize_radio
+ r_resize = args.r_resize
+ 
+ 
++def _set_global_seed(seed: int) -> None:
++    random.seed(seed)
++    np.random.seed(seed)
++    torch.manual_seed(seed)
++    if torch.cuda.is_available():
++        torch.cuda.manual_seed_all(seed)
++    torch.backends.cudnn.deterministic = True
++    torch.backends.cudnn.benchmark = False
++
++
+ def train(args, model_name, device_ids, device):
+     
+     #######################################################
+@@ -83,7 +104,8 @@ def train(args, model_name, device_ids, device):
+         lambda_d_class = 1
+         lambda_d_reg = 0.001
+ 
+-    random_seed = random.randint(1, 100)
++    random_seed = int(args.seed)
++    _set_global_seed(random_seed)
+     shuffle = True
+     lossT = []
+     lossL = []
+@@ -116,7 +138,11 @@ def train(args, model_name, device_ids, device):
+             train_label_dir_list.append(imagename + '/' + imagename_num)
+             ssss += 1
+ 
+-    Training_Data = Images_Dataset_folder_2d(train_data_dir, train_label_dir, train_data_dir_list, train_label_dir_list, mode = datasets_plag)
++    try:
++        Training_Data = Images_Dataset_folder_2d(train_data_dir, train_label_dir, train_data_dir_list, train_label_dir_list, mode = datasets_plag)
++    except Exception as exc:
++        _log_exception("dataloader_train_init", exc)
++        raise
+ 
+     num_train = len(Training_Data)
+ 
+@@ -151,7 +177,11 @@ def train(args, model_name, device_ids, device):
+             train_label_dir_list.append(imagename + '/' + imagename_num)
+ 
+ 
+-    Training_Data = Images_Dataset_folder_2d(train_data_dir, train_label_dir, train_data_dir_list, train_label_dir_list, mode = 'test')
++    try:
++        Training_Data = Images_Dataset_folder_2d(train_data_dir, train_label_dir, train_data_dir_list, train_label_dir_list, mode = 'test')
++    except Exception as exc:
++        _log_exception("dataloader_test_init", exc)
++        raise
+ 
+     num_train = len(Training_Data)
+ 
+@@ -184,7 +214,7 @@ def train(args, model_name, device_ids, device):
+     NLL_criterion = torch.nn.NLLLoss()
+ 
+ 
+-    opt = torch.optim.Adam(model_train.parameters(), lr=initial_lr) # try SGD
++    opt = torch.optim.Adam(model_train.parameters(), lr=initial_lr, weight_decay=args.weight_decay) # try SGD
+     MAX_STEP = args.epochs
+     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, MAX_STEP, eta_min=0)
+     
+@@ -198,37 +228,39 @@ def train(args, model_name, device_ids, device):
+     try:
+         shutil.rmtree(LOG_DIR)
+         print('Model folder there, so deleted for newer one')
+-        os.mkdir(LOG_DIR)
+     except OSError:
+-        print("Creation of the log directory '%s' failed " % LOG_DIR)
+-    else:
+-        print("Successfully created the log directory '%s' " % LOG_DIR)
++        pass
++    os.makedirs(LOG_DIR, exist_ok=True)
++    print("Log directory ready: '%s' " % LOG_DIR)
+     writer = SummaryWriter(LOG_DIR)
+ 
+-    try:
+-        os.mkdir(MODEL_DIR)
+-    except OSError:
+-        print("Creation of the model directory '%s' failed " % MODEL_DIR)
+-    else:
+-        print("Successfully created the model directory '%s' " % MODEL_DIR)
++    os.makedirs(MODEL_DIR, exist_ok=True)
++    print("Model directory ready: '%s' " % MODEL_DIR)
+     
+     
+ 
++    read_model_path = MODEL_DIR + str(epoch) + '_' + str(batch_size)
++    fold_match = re.search(r'/fold([0-3])/', MODEL_DIR)
++    fold_name = f"fold{fold_match.group(1)}" if fold_match else "fold_unknown"
++    metrics_json_path = os.path.join(read_model_path, f'metrics_{fold_name}.json')
++    metrics_csv_path = os.path.join(read_model_path, f'metrics_{fold_name}.csv')
++
+     if to_restore:
+-        print("loading model")
+-        model_train.load_state_dict(torch.load(MODEL_DIR   + str(epoch) + '_' + str(batch_size) + '/epoch_' + str(epoch) + '_batchsize_' + str(batch_size) + '.pth'))
++        os.makedirs(read_model_path, exist_ok=True)
++        restore_ckpt = str(args.restore_ckpt).strip()
++        if restore_ckpt:
++            restore_path = restore_ckpt
++        else:
++            restore_path = os.path.join(read_model_path, f'epoch_{epoch}_batchsize_{batch_size}.pth')
++        print(f"loading model from: {restore_path}")
++        model_train.load_state_dict(torch.load(restore_path))
+     else:
+-        read_model_path = MODEL_DIR  + str(epoch) + '_' + str(batch_size)
+         print(read_model_path)
+         if os.path.exists(read_model_path) and os.path.isdir(read_model_path):
+             shutil.rmtree(read_model_path)
+             print('Model folder there, so deleted for newer one')
+-        try:
+-            os.mkdir(read_model_path)
+-        except OSError:
+-            print("Creation of the model directory '%s' failed" % read_model_path)
+-        else:
+-            print("Successfully created the model directory '%s' " % read_model_path)
++        os.makedirs(read_model_path, exist_ok=True)
++        print("Model directory ready: '%s' " % read_model_path)
+ 
+     ######################DATA NROM########################
+ 
+@@ -239,52 +271,131 @@ def train(args, model_name, device_ids, device):
+     idx_tensor = torch.autograd.Variable(torch.FloatTensor(idx_tensor)).to(device)
+     #=============================================================================
+     print("begin training")
+-
+-
+-    valid_loss_min = np.Inf
+-    r_loss_min = np.Inf
++    torch.autograd.set_detect_anomaly(True)
++
++
++    valid_loss_min = np.inf
++    r_loss_min = np.inf
++    r_loss_stop_min = np.inf
++    early_stop_counter = 0
++    early_stop_patience = args.early_stop_patience
++    early_stop_min_delta = args.early_stop_min_delta
++    early_stop_min_epochs = args.early_stop_min_epochs
++    best_epoch = -1
++    training_start_ts = time.time()
++    metrics_rows = []
++    early_stop_triggered = False
++
++    def write_metrics_snapshot() -> None:
++        payload = {
++            'fold': fold_name,
++            'run_dir': read_model_path,
++            'seed': int(args.seed),
++            'batch_size': int(batch_size),
++            'configured_epochs': int(epoch),
++            'completed_epochs': len(metrics_rows),
++            'best_epoch': int(best_epoch) if best_epoch > 0 else None,
++            'best_val': float(r_loss_min) if np.isfinite(r_loss_min) else None,
++            'last_epoch': int(metrics_rows[-1]['epoch']) if metrics_rows else None,
++            'last_val': float(metrics_rows[-1]['valid_loss']) if metrics_rows else None,
++            'duration_sec': float(metrics_rows[-1]['elapsed_sec']) if metrics_rows else 0.0,
++            'early_stop_triggered': bool(early_stop_triggered),
++            'metrics': metrics_rows,
++        }
++        with open(metrics_json_path, 'w', encoding='utf-8') as jf:
++            json.dump(payload, jf, ensure_ascii=True, indent=2)
++
++        fieldnames = [
++            'epoch', 'lr', 'train_loss', 'valid_loss', 'valid_class_loss', 'valid_reg_loss',
++            'r_loss', 'acc1', 'acc2', 'seg_acc', 'centerline_acc',
++            'skipped_invalid_train', 'skipped_nan_train', 'skipped_invalid_val', 'skipped_nan_val',
++            'elapsed_sec', 'is_best', 'early_stop_triggered'
++        ]
++        with open(metrics_csv_path, 'w', newline='', encoding='utf-8') as cf:
++            writer_csv = csv.DictWriter(cf, fieldnames=fieldnames)
++            writer_csv.writeheader()
++            writer_csv.writerows(metrics_rows)
++
++    eps = 1e-6
++    def weighted_bce_with_logits(logits, target, w):
++        target_f = target.float()
++        weight = torch.full_like(target_f, 1 - w)
++        weight = torch.where(target_f > 0, torch.full_like(target_f, w), weight)
++        probs = torch.sigmoid(logits)
++        probs = torch.clamp(probs, eps, 1 - eps)
++        logits_clamped = torch.logit(probs, eps=eps)
++        return F.binary_cross_entropy_with_logits(logits_clamped, target_f, weight=weight)
+ 
+     n_iter = 1
+     global_step_ = 0
+     for i in range(epoch):
++        _CURRENT_CONTEXT = f"epoch={i+1}"
+         train_loss = 0.0
+         valid_loss = 0.0
+         valid_class_loss = 0.0
+         valid_reg_loss = 0.0
+         valid_rad_loss = 0.0
+-        
++        skipped_invalid_train = 0
++        skipped_invalid_val = 0
++        skipped_nan_train = 0
++        skipped_nan_val = 0
++
+         since = time.time()
+-        scheduler.step(i)
+-        print('learning rate: %f' % (opt.param_groups[0]['lr']))
++        lr_current = float(opt.param_groups[0]['lr'])
++        print('learning rate: %f' % lr_current)
+ 
+         train_step_temp = 0
+         valid_step_temp = 0
+-        
++
+         #######################################################
+         #                    Training Data
+         #######################################################
+         model_train.train()
+ 
+         load_begin_time_1 = time.time()
+-        for x_img, y_lab, y_dis, y_r, y_exist, y1, y2, y1_bin, y2_bin in train_loader:
+-            train_begin_time = time.time()
+-            
++        try:
++            for x_img, y_lab, y_dis, y_r, y_exist, y1, y2, y1_bin, y2_bin in train_loader:
++                _CURRENT_CONTEXT = f"train_epoch={i+1}"
++                train_begin_time = time.time()
++
+             y_exist_rnn = y_exist.view(-1)
+             y_r_rnn = y_r.view(-1)
+             y1_rnn = y1.view(-1)
+             y2_rnn = y2.view(-1)
+             y1_bin_rnn = y1_bin.view(-1)
+             y2_bin_rnn = y2_bin.view(-1)
+-            
++
+             exist_id_rnn = np.where(y_exist_rnn==1)
+             exist_no_id_rnn = np.where(y_exist_rnn==0)
+-            
++
+             x_img, y_lab, y_dis = x_img.to(device), y_lab.to(device), y_dis.to(device)
+             y_exist_rnn, y1_rnn, y2_rnn, y1_bin_rnn, y2_bin_rnn = y_exist_rnn.to(device), y1_rnn.to(device), y2_rnn.to(device), y1_bin_rnn.to(device), y2_bin_rnn.to(device)
+-            
++            # sanitize inputs/labels to avoid NaN/Inf propagation
++            x_img = torch.nan_to_num(x_img, nan=0.0, posinf=0.0, neginf=0.0)
++            y_lab = torch.nan_to_num(y_lab, nan=0.0, posinf=0.0, neginf=0.0).clamp(0, 1)
++            y_dis = torch.nan_to_num(y_dis, nan=0.0, posinf=0.0, neginf=0.0).clamp(0, 1)
++            y_exist_rnn = torch.nan_to_num(y_exist_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++            y1_rnn = torch.nan_to_num(y1_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++            y2_rnn = torch.nan_to_num(y2_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++            y1_bin_rnn = torch.nan_to_num(y1_bin_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++            y2_bin_rnn = torch.nan_to_num(y2_bin_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++            if (
++                torch.isnan(x_img).any() or torch.isinf(x_img).any() or
++                torch.isnan(y_lab).any() or torch.isinf(y_lab).any() or
++                torch.isnan(y_dis).any() or torch.isinf(y_dis).any() or
++                torch.isnan(y1_bin_rnn).any() or torch.isinf(y1_bin_rnn).any() or
++                torch.isnan(y2_bin_rnn).any() or torch.isinf(y2_bin_rnn).any() or
++                (y1_bin_rnn < 0).any() or (y1_bin_rnn >= vector_bins).any() or
++                (y2_bin_rnn < 0).any() or (y2_bin_rnn >= vector_bins).any()
++            ):
++                skipped_invalid_train += 1
++                if skipped_invalid_train <= 5 or (skipped_invalid_train % 50) == 0:
++                    print("skip batch: invalid labels/bins")
++                continue
++
+             opt.zero_grad()
+             y_lab_pred, y_dis_pred, y_d_pred_1_rnn, y_d_pred_2_rnn, y_r_pred_rnn = model_train(x_img)
+-        
++
+             y_r_pred_rnn = y_r_pred_rnn.view(-1)
+             y_d_pred_1_rnn = y_d_pred_1_rnn.view(-1,vector_bins)
+             y_d_pred_2_rnn = y_d_pred_2_rnn.view(-1,vector_bins)
+@@ -303,14 +414,14 @@ def train(args, model_name, device_ids, device):
+             y_d_reg_pred_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2], dtype=torch.float32)
+             y_r_exist_rnn = torch.zeros([len(exist_id_rnn[0])], dtype=torch.float32)
+             y_r_pred_exist_rnn = torch.zeros([len(exist_id_rnn[0])], dtype=torch.float32)
+-            
++
+             exist_num = 0
+             for exist_id_num in exist_id_rnn[0]:
+                 onehot_0_0 = y1_bin_rnn[exist_id_num]
+                 onehot_1_0 = y2_bin_rnn[exist_id_num]
+                 y_d_class_exist_rnn[exist_num][0][onehot_0_0] = 1
+                 y_d_class_exist_rnn[exist_num][1][onehot_1_0] = 1
+-                
++
+                 y_d_class_pred_exist_rnn[exist_num][0] = sigmoid_layer(y_d_pred_1_rnn[exist_id_num])
+                 y_d_class_pred_exist_rnn[exist_num][1] = sigmoid_layer(y_d_pred_2_rnn[exist_id_num])
+ 
+@@ -325,42 +436,68 @@ def train(args, model_name, device_ids, device):
+                 y_r_pred_exist_rnn[exist_num] = y_r_pred_rnn[exist_id_num]
+ 
+                 exist_num += 1
+-            
++
++            y_d_reg_pred_exist_rnn = torch.nan_to_num(y_d_reg_pred_exist_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++            y_d_reg_exist_rnn = torch.nan_to_num(y_d_reg_exist_rnn, nan=0.0, posinf=0.0, neginf=0.0)
+             vector_up = torch.sum(torch.multiply(y_d_reg_pred_exist_rnn,y_d_reg_exist_rnn), axis=1)
+             vector_down_test = torch.sqrt(torch.multiply(y_d_reg_pred_exist_rnn[:,0],y_d_reg_pred_exist_rnn[:,0]) + torch.multiply(y_d_reg_pred_exist_rnn[:,1],y_d_reg_pred_exist_rnn[:,1])  + 1e-9)
+             vector_down_gold = torch.sqrt(torch.multiply(y_d_reg_exist_rnn[:,0],y_d_reg_exist_rnn[:,0]) + torch.multiply(y_d_reg_exist_rnn[:,1],y_d_reg_exist_rnn[:,1]) + 1e-9)
+ 
+             angle_result = vector_up/(vector_down_test*vector_down_gold + 1e-9)
+-            angle_result_norm_0 = torch.minimum(angle_result, torch.ones_like(angle_result))
+-            angle_result_norm_1 = torch.maximum(angle_result_norm_0, -torch.ones_like(angle_result))
+-
+-            angle_arccos_rnn = torch.arccos(angle_result_norm_1)*180/np.pi
+-            angle_arccos_gt_rnn = torch.zeros_like(angle_arccos_rnn)
++            angle_result = torch.nan_to_num(angle_result, nan=0.0, posinf=1.0, neginf=-1.0)
++            angle_result_norm_1 = torch.clamp(angle_result, -1 + eps, 1 - eps)
++            if not torch.isfinite(angle_result_norm_1).all():
++                skipped_nan_train += 1
++                if skipped_nan_train <= 5 or (skipped_nan_train % 50) == 0:
++                    print("skip batch: non-finite angle input")
++                continue
++            # Keep arccos only for monitoring; use cosine loss for stable gradients.
++            angle_arccos_rnn_metric = torch.arccos(angle_result_norm_1.detach()) * 180 / np.pi
++            if not torch.isfinite(angle_arccos_rnn_metric).all():
++                skipped_nan_train += 1
++                if skipped_nan_train <= 5 or (skipped_nan_train % 50) == 0:
++                    print("skip batch: non-finite angle output")
++                continue
++            angle_arccos_rnn_metric = torch.where(
++                angle_arccos_rnn_metric > 90,
++                180 - angle_arccos_rnn_metric,
++                angle_arccos_rnn_metric
++            )
+ 
+-            for ss in range(angle_arccos_rnn.shape[0]):
+-                if angle_arccos_rnn[ss] > 90:
+-                    angle_arccos_rnn[ss] = 180 - angle_arccos_rnn[ss]
+-            
+-            
+-            
+             # Loss
+-            loss_img_seg = lambda_seg * bce_loss_w(y_lab_pred, y_lab, 0.8)
+-            loss_img_centerline = lambda_centerline * bce_loss_w(y_dis_pred, y_dis, 0.9)
+-            lossdice_seg = dice_score(y_lab_pred, y_lab)
+-            lossdice_centerline = dice_score(y_dis_pred, y_dis)
+-            
++            y_lab_pred_prob = torch.sigmoid(y_lab_pred)
++            y_lab_pred_prob = torch.clamp(y_lab_pred_prob, eps, 1 - eps)
++            y_dis_pred_prob = torch.sigmoid(y_dis_pred)
++            y_dis_pred_prob = torch.clamp(y_dis_pred_prob, eps, 1 - eps)
++
++            loss_img_seg = lambda_seg * weighted_bce_with_logits(y_lab_pred, y_lab, 0.8)
++            loss_img_centerline = lambda_centerline * weighted_bce_with_logits(y_dis_pred, y_dis, 0.9)
++            lossdice_seg = dice_score(y_lab_pred_prob, y_lab)
++            lossdice_centerline = dice_score(y_dis_pred_prob, y_dis)
++
++            # clamp to valid BCE range to avoid numeric issues
++            y_d_class_pred_exist_rnn = torch.nan_to_num(y_d_class_pred_exist_rnn, nan=0.0, posinf=1.0, neginf=0.0)
++            y_d_class_pred_exist_rnn = torch.clamp(y_d_class_pred_exist_rnn, 1e-6, 1 - 1e-6)
+             loss_img_direction_rnn_class1 = bce_criterion(y_d_class_pred_exist_rnn[:,0,:], y_d_class_exist_rnn[:,0,:])
+             loss_img_direction_rnn_class2 = bce_criterion(y_d_class_pred_exist_rnn[:,1,:], y_d_class_exist_rnn[:,1,:])
+             loss_img_direction_rnn_class = lambda_d_class * (loss_img_direction_rnn_class1 + loss_img_direction_rnn_class2)/2
+-            
+-            loss_img_direction_rnn_reg = lambda_d_reg * MSE_loss(angle_arccos_rnn, angle_arccos_gt_rnn)
+-            
++
++            # Minimize angular deviation via cosine distance to avoid acos backward instability.
++            loss_img_direction_rnn_reg = lambda_d_reg * torch.mean((1.0 - angle_result_norm_1) ** 2)
++
+             loss_img_radius_rnn = lambda_r * MSE_loss(y_r_pred_exist_rnn, y_r_exist_rnn)
+-            
++
+             lossT = loss_img_seg + loss_img_centerline + loss_img_direction_rnn_class + loss_img_direction_rnn_reg + loss_img_radius_rnn
++            if not torch.isfinite(lossT):
++                skipped_nan_train += 1
++                if skipped_nan_train <= 5 or (skipped_nan_train % 50) == 0:
++                    print("skip batch: non-finite total loss")
++                continue
+ 
+             train_loss += lossT.item()
+             lossT.backward()
++            # gradient clipping to prevent exploding gradients
++            torch.nn.utils.clip_grad_norm_(model_train.parameters(), max_norm=5.0)
+             opt.step()
+ 
+ 
+@@ -368,9 +505,9 @@ def train(args, model_name, device_ids, device):
+             if (train_step_temp+1) % 20 == 0:
+                 print("===================================================================================")
+                 print('Epoch: {}/{} \t Step: {}/{} \t Total Loss: {:.5f} \t Time: {:.5f}/step'.format(i + 1, epoch, train_step_temp, total_step, lossT.item(),  train_end_time-train_begin_time))
+-                
++
+                 if train_seg == False:
+-                    print('Vector Angle LSTM: {:.5f} \t'.format(torch.mean(angle_arccos_rnn)))
++                    print('Vector Angle LSTM: {:.5f} \t'.format(torch.mean(angle_arccos_rnn_metric)))
+                     print('Radius LSTM Loss: {:.5f} \t Class LSTM Loss: {:.5f} \t Reg LSTM Loss: {:.5f} \t'.format(loss_img_radius_rnn.item(), loss_img_direction_rnn_class.item(), loss_img_direction_rnn_reg.item()))
+                 else:
+                     print('Segmentation Loss: {:.5f} \t F1: {:.5f} \t | Centerline Loss: {:.5f} \t F1: {:.5f} \t'.format(loss_img_seg.item(),lossdice_seg.item(), loss_img_centerline.item(), lossdice_centerline.item()))
+@@ -379,15 +516,17 @@ def train(args, model_name, device_ids, device):
+             train_step_temp += 1
+             writer.add_scalar('Training Segmentation Loss', loss_img_seg.item(), global_step=global_step_)
+             writer.add_scalar('Training Centerline Loss', loss_img_centerline.item(), global_step=global_step_)
+-            
++
+             writer.add_scalar('Training Radius Reg LSTM Loss', loss_img_radius_rnn.item(), global_step=global_step_)
+             writer.add_scalar('Training Vector Reg LSTM Loss', loss_img_direction_rnn_reg.item(), global_step=global_step_)
+             writer.add_scalar('Training Vector Class LSTM Loss', loss_img_direction_rnn_class.item(), global_step=global_step_)
+             writer.add_scalar('Training Total Loss', lossT.item(), global_step=global_step_)
+             writer.add_scalar('Training Total Loss', lossT.item(), global_step=global_step_)
+             global_step_ += 1
+-
+             load_begin_time_1 = time.time()
++        except Exception as exc:
++            _log_exception(_CURRENT_CONTEXT, exc)
++            raise
+ 
+ 
+         #######################################################
+@@ -401,7 +540,7 @@ def train(args, model_name, device_ids, device):
+ 
+         pos_num = 0
+         pos_loss = 0
+-        
++
+         seg_acc_list = []
+         centerline_acc_list = []
+ 
+@@ -411,156 +550,199 @@ def train(args, model_name, device_ids, device):
+         class_acc_list3 = []
+         angle_rnn_list = []
+ 
+-        for x_img, y_lab, y_dis, y_r, y_exist, y1, y2, y1_bin, y2_bin in test_loader:
+-            train_begin_time = time.time()
+-
+-            y_exist_rnn = y_exist.view(-1)
+-            y_r_rnn = y_r.view(-1)
+-            y1_rnn = y1.view(-1)
+-            y2_rnn = y2.view(-1)
+-            
+-            y1_bin_rnn = y1_bin.view(-1)
+-            y2_bin_rnn = y2_bin.view(-1)
+-            
+-            exist_id_rnn = np.where(y_exist_rnn==1)
+-            
+-            x_img, y_lab, y_dis = x_img.to(device), y_lab.to(device), y_dis.to(device)
+-            y_exist_rnn, y1_rnn, y2_rnn, y1_bin_rnn, y2_bin_rnn = y_exist_rnn.to(device), y1_rnn.to(device), y2_rnn.to(device), y1_bin_rnn.to(device), y2_bin_rnn.to(device)
+-            
+-            opt.zero_grad()
+-
+-            y_lab_pred, y_dis_pred, y_d_pred_1_rnn, y_d_pred_2_rnn, y_r_pred_rnn = model_train(x_img)
+-                        
+-            y_r_pred_rnn = y_r_pred_rnn.view(-1)
+-            y_d_pred_1_rnn = y_d_pred_1_rnn.view(-1,vector_bins)
+-            y_d_pred_2_rnn = y_d_pred_2_rnn.view(-1,vector_bins)
+-            
+-            vector1_predicted_softmax_rnn = softmax(y_d_pred_1_rnn)
+-            vector2_predicted_softmax_rnn = softmax(y_d_pred_2_rnn)
+-
+-
+-            vector_predicted_rnn = torch.zeros([y_d_pred_1_rnn.shape[0],2], dtype=torch.float32)
+-            vector_predicted_rnn[:,0] = torch.sum(vector1_predicted_softmax_rnn * idx_tensor, 1) * (1/vector_bins) * 2 - 1
+-            vector_predicted_rnn[:,1] = torch.sum(vector2_predicted_softmax_rnn * idx_tensor, 1) * (1/vector_bins) #* 2 - 1
+-
+-
+-            y_d_class_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2, vector_bins], dtype=torch.float32)
+-            y_d_class_pred_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2, vector_bins], dtype=torch.float32)
+-            y_d_reg_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2], dtype=torch.float32)
+-            y_d_reg_pred_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2], dtype=torch.float32)
+-            y_r_exist_rnn = torch.zeros([len(exist_id_rnn[0])], dtype=torch.float32)
+-            y_r_pred_exist_rnn = torch.zeros([len(exist_id_rnn[0])], dtype=torch.float32)
+-            
+-            exist_num = 0
+-            for exist_id_num in exist_id_rnn[0]:
+-                onehot_0_0 = y1_bin_rnn[exist_id_num]
+-                onehot_1_0 = y2_bin_rnn[exist_id_num]
+-                y_d_class_exist_rnn[exist_num][0][onehot_0_0] = 1
+-                y_d_class_exist_rnn[exist_num][1][onehot_1_0] = 1
+-                
+-                y_d_class_pred_exist_rnn[exist_num][0] = sigmoid_layer(y_d_pred_1_rnn[exist_id_num])
+-                y_d_class_pred_exist_rnn[exist_num][1] = sigmoid_layer(y_d_pred_2_rnn[exist_id_num])
+-
+-                y_d_reg_exist_rnn[exist_num][0] = y1_rnn[exist_id_num]
+-                y_d_reg_exist_rnn[exist_num][1] = y2_rnn[exist_id_num]
+-
+-                vector_predicted_norm = torch.sqrt(vector_predicted_rnn[exist_id_num][0]**2 + vector_predicted_rnn[exist_id_num][1]**2 + 1e-9)
+-                y_d_reg_pred_exist_rnn[exist_num][0] = vector_predicted_rnn[exist_id_num][0] / vector_predicted_norm
+-                y_d_reg_pred_exist_rnn[exist_num][1] = vector_predicted_rnn[exist_id_num][1] / vector_predicted_norm
+-
+-                y_r_exist_rnn[exist_num] = y_r_rnn[exist_id_num]
+-                y_r_pred_exist_rnn[exist_num] = y_r_pred_rnn[exist_id_num]
+-
+-                exist_num += 1
+-                
+-            
+-            vector_up = torch.sum(torch.multiply(y_d_reg_pred_exist_rnn,y_d_reg_exist_rnn), axis=1)
+-            vector_down_test = torch.sqrt(torch.multiply(y_d_reg_pred_exist_rnn[:,0],y_d_reg_pred_exist_rnn[:,0]) + torch.multiply(y_d_reg_pred_exist_rnn[:,1],y_d_reg_pred_exist_rnn[:,1]) + 1e-9)
+-            vector_down_gold = torch.sqrt(torch.multiply(y_d_reg_exist_rnn[:,0],y_d_reg_exist_rnn[:,0]) + torch.multiply(y_d_reg_exist_rnn[:,1],y_d_reg_exist_rnn[:,1])  + 1e-9)
+-
+-            angle_result = vector_up/(vector_down_test*vector_down_gold + 1e-9)
+-            angle_result_norm_0 = torch.minimum(angle_result, torch.ones_like(angle_result))
+-            angle_result_norm_1 = torch.maximum(angle_result_norm_0, -torch.ones_like(angle_result))
+-
+-            angle_arccos_rnn = torch.arccos(angle_result_norm_1)*180/np.pi
+-            angle_arccos_gt_rnn = torch.zeros_like(angle_arccos_rnn)
+-
+-            for ss in range(angle_arccos_rnn.shape[0]):
+-                if angle_arccos_rnn[ss] > 90:
+-                    angle_arccos_rnn[ss] = 180 - angle_arccos_rnn[ss]
+-            angle_rnn_list.append(torch.mean(angle_arccos_rnn).cpu().detach().numpy())
+-
+-
+-            # Loss            
+-            loss_img_seg = lambda_seg * bce_loss_w(y_lab_pred, y_lab, 0.8)
+-            loss_img_centerline = lambda_centerline *  bce_loss_w(y_dis_pred, y_dis, 0.9)
+-
+-            loss_img_direction_rnn_class1 = bce_criterion(y_d_class_pred_exist_rnn[:,0,:], y_d_class_exist_rnn[:,0,:])
+-            loss_img_direction_rnn_class2 = bce_criterion(y_d_class_pred_exist_rnn[:,1,:], y_d_class_exist_rnn[:,1,:])
+-            loss_img_direction_rnn_class = lambda_d_class * (loss_img_direction_rnn_class1 + loss_img_direction_rnn_class2)/2
+-
+-            loss_img_direction_rnn_reg = lambda_d_reg * MSE_loss(angle_arccos_rnn, angle_arccos_gt_rnn)
+-
+-            loss_img_radius_rnn = lambda_r * MSE_loss(y_r_pred_exist_rnn, y_r_exist_rnn)
+-
+-            lossL = loss_img_seg + loss_img_centerline + loss_img_direction_rnn_class + loss_img_direction_rnn_reg + loss_img_radius_rnn 
+-
+-            valid_loss += lossL.item()
+-            valid_class_loss += loss_img_direction_rnn_class.item()
+-            valid_reg_loss += loss_img_direction_rnn_reg.item()
+-
+-            valid_step_temp += 1
+-
+-            # =========================================================================================
+-
+-            # seg centerline 计算误差
+-            lossdice_seg = dice_score(y_lab_pred, y_lab)
+-            seg_acc_list.append(lossdice_seg.item())
+-            
+-            lossdice_centerline = dice_score(y_dis_pred, y_dis)
+-            centerline_acc_list.append(lossdice_centerline.item())
+-
+-            # R的计算误差
+-            y_r1_cpu = y_r_exist_rnn.cpu().detach().numpy()
+-            y_pred_r_cpu = y_r_pred_exist_rnn.cpu().detach().numpy()
+-            for s in range(y_pred_r_cpu.shape[0]):
+-                s_temp = y_r1_cpu[s] - y_pred_r_cpu[s]
+-                if s_temp < 0:
+-                    neg_num += 1
+-                    neg_loss += abs(s_temp)*r_resize
+-                else:
+-                    pos_num += 1
+-                    pos_loss += abs(s_temp)*r_resize
+-            
+-
+-            # 分类和角度的计算误差
+-            # # 分类误差
+-            y_pred1_cpu = y_d_class_pred_exist_rnn[:,0,:].cpu().detach().numpy()
+-            y_pred2_cpu = y_d_class_pred_exist_rnn[:,1,:].cpu().detach().numpy()
+-
+-            y1_bin1_cpu = y_d_class_exist_rnn[:,0,:].cpu().detach().numpy()
+-            y2_bin1_cpu = y_d_class_exist_rnn[:,1,:].cpu().detach().numpy()
+-
+-            pred1 = y_pred1_cpu.argsort(axis=1)[:,-1:]  # 获取最大值位置
+-            pred2 = y_pred2_cpu.argsort(axis=1)[:,-1:]  # 获取最大值位置
+-
+-            y1_bin1_cpu_min = np.min(y1_bin1_cpu, axis=1)
+-            y2_bin1_cpu_min = np.min(y2_bin1_cpu, axis=1)
+-
+-            for ss in range(pred1.shape[0]):
+-                if pred1[ss][0]>=vector_bins//2:
+-                    pred1[ss][0] = vector_bins - 1 - pred1[ss][0]
+-                if pred2[ss][0]>=vector_bins//2:
+-                    pred2[ss][0] = vector_bins - 1 - pred2[ss][0]
+-
+-            cur_acc1 = np.mean(np.equal(pred1, y1_bin1_cpu_min)*np.ones_like(pred1))
+-            cur_acc2 = np.mean(np.equal(pred2, y2_bin1_cpu_min)*np.ones_like(pred2))
+-
+-            class_acc_list1.append(cur_acc1)
+-            class_acc_list2.append(cur_acc2)
+-
+-
+-            
++        try:
++            for x_img, y_lab, y_dis, y_r, y_exist, y1, y2, y1_bin, y2_bin in test_loader:
++                _CURRENT_CONTEXT = f"val_epoch={i+1}"
++                train_begin_time = time.time()
++
++                y_exist_rnn = y_exist.view(-1)
++                y_r_rnn = y_r.view(-1)
++                y1_rnn = y1.view(-1)
++                y2_rnn = y2.view(-1)
++
++                y1_bin_rnn = y1_bin.view(-1)
++                y2_bin_rnn = y2_bin.view(-1)
++
++                exist_id_rnn = np.where(y_exist_rnn==1)
++
++                x_img, y_lab, y_dis = x_img.to(device), y_lab.to(device), y_dis.to(device)
++                y_exist_rnn, y1_rnn, y2_rnn, y1_bin_rnn, y2_bin_rnn = y_exist_rnn.to(device), y1_rnn.to(device), y2_rnn.to(device), y1_bin_rnn.to(device), y2_bin_rnn.to(device)
++                x_img = torch.nan_to_num(x_img, nan=0.0, posinf=0.0, neginf=0.0)
++                y_lab = torch.nan_to_num(y_lab, nan=0.0, posinf=0.0, neginf=0.0).clamp(0, 1)
++                y_dis = torch.nan_to_num(y_dis, nan=0.0, posinf=0.0, neginf=0.0).clamp(0, 1)
++                y_exist_rnn = torch.nan_to_num(y_exist_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++                y1_rnn = torch.nan_to_num(y1_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++                y2_rnn = torch.nan_to_num(y2_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++                y1_bin_rnn = torch.nan_to_num(y1_bin_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++                y2_bin_rnn = torch.nan_to_num(y2_bin_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++                if (
++                    torch.isnan(x_img).any() or torch.isinf(x_img).any() or
++                    torch.isnan(y_lab).any() or torch.isinf(y_lab).any() or
++                    torch.isnan(y_dis).any() or torch.isinf(y_dis).any() or
++                    torch.isnan(y1_bin_rnn).any() or torch.isinf(y1_bin_rnn).any() or
++                    torch.isnan(y2_bin_rnn).any() or torch.isinf(y2_bin_rnn).any() or
++                    (y1_bin_rnn < 0).any() or (y1_bin_rnn >= vector_bins).any() or
++                    (y2_bin_rnn < 0).any() or (y2_bin_rnn >= vector_bins).any()
++                ):
++                    skipped_invalid_val += 1
++                    if skipped_invalid_val <= 5 or (skipped_invalid_val % 50) == 0:
++                        print("skip val batch: invalid labels/bins")
++                    continue
++
++                opt.zero_grad()
++
++                y_lab_pred, y_dis_pred, y_d_pred_1_rnn, y_d_pred_2_rnn, y_r_pred_rnn = model_train(x_img)
++
++                y_r_pred_rnn = y_r_pred_rnn.view(-1)
++                y_d_pred_1_rnn = y_d_pred_1_rnn.view(-1,vector_bins)
++                y_d_pred_2_rnn = y_d_pred_2_rnn.view(-1,vector_bins)
++
++                vector1_predicted_softmax_rnn = softmax(y_d_pred_1_rnn)
++                vector2_predicted_softmax_rnn = softmax(y_d_pred_2_rnn)
++
++                vector_predicted_rnn = torch.zeros([y_d_pred_1_rnn.shape[0],2], dtype=torch.float32)
++                vector_predicted_rnn[:,0] = torch.sum(vector1_predicted_softmax_rnn * idx_tensor, 1) * (1/vector_bins) * 2 - 1
++                vector_predicted_rnn[:,1] = torch.sum(vector2_predicted_softmax_rnn * idx_tensor, 1) * (1/vector_bins) #* 2 - 1
++
++                y_d_class_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2, vector_bins], dtype=torch.float32)
++                y_d_class_pred_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2, vector_bins], dtype=torch.float32)
++                y_d_reg_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2], dtype=torch.float32)
++                y_d_reg_pred_exist_rnn = torch.zeros([len(exist_id_rnn[0]), 2], dtype=torch.float32)
++                y_r_exist_rnn = torch.zeros([len(exist_id_rnn[0])], dtype=torch.float32)
++                y_r_pred_exist_rnn = torch.zeros([len(exist_id_rnn[0])], dtype=torch.float32)
++
++                exist_num = 0
++                for exist_id_num in exist_id_rnn[0]:
++                    onehot_0_0 = y1_bin_rnn[exist_id_num]
++                    onehot_1_0 = y2_bin_rnn[exist_id_num]
++                    y_d_class_exist_rnn[exist_num][0][onehot_0_0] = 1
++                    y_d_class_exist_rnn[exist_num][1][onehot_1_0] = 1
++
++                    y_d_class_pred_exist_rnn[exist_num][0] = sigmoid_layer(y_d_pred_1_rnn[exist_id_num])
++                    y_d_class_pred_exist_rnn[exist_num][1] = sigmoid_layer(y_d_pred_2_rnn[exist_id_num])
++
++                    y_d_reg_exist_rnn[exist_num][0] = y1_rnn[exist_id_num]
++                    y_d_reg_exist_rnn[exist_num][1] = y2_rnn[exist_id_num]
++
++                    vector_predicted_norm = torch.sqrt(vector_predicted_rnn[exist_id_num][0]**2 + vector_predicted_rnn[exist_id_num][1]**2 + 1e-9)
++                    y_d_reg_pred_exist_rnn[exist_num][0] = vector_predicted_rnn[exist_id_num][0] / vector_predicted_norm
++                    y_d_reg_pred_exist_rnn[exist_num][1] = vector_predicted_rnn[exist_id_num][1] / vector_predicted_norm
++
++                    y_r_exist_rnn[exist_num] = y_r_rnn[exist_id_num]
++                    y_r_pred_exist_rnn[exist_num] = y_r_pred_rnn[exist_id_num]
++
++                    exist_num += 1
++
++                y_d_reg_pred_exist_rnn = torch.nan_to_num(y_d_reg_pred_exist_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++                y_d_reg_exist_rnn = torch.nan_to_num(y_d_reg_exist_rnn, nan=0.0, posinf=0.0, neginf=0.0)
++                vector_up = torch.sum(torch.multiply(y_d_reg_pred_exist_rnn,y_d_reg_exist_rnn), axis=1)
++                vector_down_test = torch.sqrt(torch.multiply(y_d_reg_pred_exist_rnn[:,0],y_d_reg_pred_exist_rnn[:,0]) + torch.multiply(y_d_reg_pred_exist_rnn[:,1],y_d_reg_pred_exist_rnn[:,1]) + 1e-9)
++                vector_down_gold = torch.sqrt(torch.multiply(y_d_reg_exist_rnn[:,0],y_d_reg_exist_rnn[:,0]) + torch.multiply(y_d_reg_exist_rnn[:,1],y_d_reg_exist_rnn[:,1])  + 1e-9)
++
++                angle_result = vector_up/(vector_down_test*vector_down_gold + 1e-9)
++                angle_result = torch.nan_to_num(angle_result, nan=0.0, posinf=1.0, neginf=-1.0)
++                angle_result_norm_1 = torch.clamp(angle_result, -1 + eps, 1 - eps)
++                if not torch.isfinite(angle_result_norm_1).all():
++                    skipped_nan_val += 1
++                    if skipped_nan_val <= 5 or (skipped_nan_val % 50) == 0:
++                        print("skip val batch: non-finite angle input")
++                    continue
++                angle_arccos_rnn_metric = torch.arccos(angle_result_norm_1.detach()) * 180 / np.pi
++                if not torch.isfinite(angle_arccos_rnn_metric).all():
++                    skipped_nan_val += 1
++                    if skipped_nan_val <= 5 or (skipped_nan_val % 50) == 0:
++                        print("skip val batch: non-finite angle output")
++                    continue
++                angle_arccos_rnn_metric = torch.where(
++                    angle_arccos_rnn_metric > 90,
++                    180 - angle_arccos_rnn_metric,
++                    angle_arccos_rnn_metric
++                )
++                angle_rnn_list.append(torch.mean(angle_arccos_rnn_metric).cpu().detach().numpy())
++
++                # Loss
++                y_lab_pred_prob = torch.sigmoid(y_lab_pred)
++                y_lab_pred_prob = torch.clamp(y_lab_pred_prob, eps, 1 - eps)
++                y_dis_pred_prob = torch.sigmoid(y_dis_pred)
++                y_dis_pred_prob = torch.clamp(y_dis_pred_prob, eps, 1 - eps)
++
++                loss_img_seg = lambda_seg * weighted_bce_with_logits(y_lab_pred, y_lab, 0.8)
++                loss_img_centerline = lambda_centerline * weighted_bce_with_logits(y_dis_pred, y_dis, 0.9)
++
++                # clamp to valid BCE range to avoid numeric issues
++                y_d_class_pred_exist_rnn = torch.nan_to_num(y_d_class_pred_exist_rnn, nan=0.0, posinf=1.0, neginf=0.0)
++                y_d_class_pred_exist_rnn = torch.clamp(y_d_class_pred_exist_rnn, 1e-6, 1 - 1e-6)
++                loss_img_direction_rnn_class1 = bce_criterion(y_d_class_pred_exist_rnn[:,0,:], y_d_class_exist_rnn[:,0,:])
++                loss_img_direction_rnn_class2 = bce_criterion(y_d_class_pred_exist_rnn[:,1,:], y_d_class_exist_rnn[:,1,:])
++                loss_img_direction_rnn_class = lambda_d_class * (loss_img_direction_rnn_class1 + loss_img_direction_rnn_class2)/2
++
++                loss_img_direction_rnn_reg = lambda_d_reg * torch.mean((1.0 - angle_result_norm_1) ** 2)
++
++                loss_img_radius_rnn = lambda_r * MSE_loss(y_r_pred_exist_rnn, y_r_exist_rnn)
++
++                lossL = loss_img_seg + loss_img_centerline + loss_img_direction_rnn_class + loss_img_direction_rnn_reg + loss_img_radius_rnn 
++                if not torch.isfinite(lossL):
++                    skipped_nan_val += 1
++                    if skipped_nan_val <= 5 or (skipped_nan_val % 50) == 0:
++                        print("skip val batch: non-finite total loss")
++                    continue
++
++                valid_loss += lossL.item()
++                valid_class_loss += loss_img_direction_rnn_class.item()
++                valid_reg_loss += loss_img_direction_rnn_reg.item()
++
++                valid_step_temp += 1
++
++                # =========================================================================================
++
++                # seg centerline 计算误差
++                lossdice_seg = dice_score(y_lab_pred_prob, y_lab)
++                seg_acc_list.append(lossdice_seg.item())
++
++                lossdice_centerline = dice_score(y_dis_pred_prob, y_dis)
++                centerline_acc_list.append(lossdice_centerline.item())
++
++                # R的计算误差
++                y_r1_cpu = y_r_exist_rnn.cpu().detach().numpy()
++                y_pred_r_cpu = y_r_pred_exist_rnn.cpu().detach().numpy()
++                for s in range(y_pred_r_cpu.shape[0]):
++                    s_temp = y_r1_cpu[s] - y_pred_r_cpu[s]
++                    if s_temp < 0:
++                        neg_num += 1
++                        neg_loss += abs(s_temp)*r_resize
++                    else:
++                        pos_num += 1
++                        pos_loss += abs(s_temp)*r_resize
++
++                # 分类和角度的计算误差
++                # # 分类误差
++                y_pred1_cpu = y_d_class_pred_exist_rnn[:,0,:].cpu().detach().numpy()
++                y_pred2_cpu = y_d_class_pred_exist_rnn[:,1,:].cpu().detach().numpy()
++
++                y1_bin1_cpu = y_d_class_exist_rnn[:,0,:].cpu().detach().numpy()
++                y2_bin1_cpu = y_d_class_exist_rnn[:,1,:].cpu().detach().numpy()
++
++                pred1 = y_pred1_cpu.argsort(axis=1)[:,-1:]  # 获取最大值位置
++                pred2 = y_pred2_cpu.argsort(axis=1)[:,-1:]  # 获取最大值位置
++
++                y1_bin1_cpu_min = np.min(y1_bin1_cpu, axis=1)
++                y2_bin1_cpu_min = np.min(y2_bin1_cpu, axis=1)
++
++                for ss in range(pred1.shape[0]):
++                    if pred1[ss][0]>=vector_bins//2:
++                        pred1[ss][0] = vector_bins - 1 - pred1[ss][0]
++                    if pred2[ss][0]>=vector_bins//2:
++                        pred2[ss][0] = vector_bins - 1 - pred2[ss][0]
++
++                cur_acc1 = np.mean(np.equal(pred1, y1_bin1_cpu_min)*np.ones_like(pred1))
++                cur_acc2 = np.mean(np.equal(pred2, y2_bin1_cpu_min)*np.ones_like(pred2))
++
++                class_acc_list1.append(cur_acc1)
++                class_acc_list2.append(cur_acc2)
++
++        except Exception as exc:
++            _log_exception(_CURRENT_CONTEXT, exc)
++            raise
+         print("============================================")
+         print('total num: %d' % (split))
+         print("--------------------------------------------")
+@@ -578,7 +760,12 @@ def train(args, model_name, device_ids, device):
+         print("--------------------------------------------")
+         print('acc1平均准确率:', np.mean(class_acc_list1))
+         print('acc2平均准确率:', np.mean(class_acc_list2))
+-        print('平均偏差角度:', valid_reg_loss / valid_step_temp)
++        if valid_step_temp > 0:
++            print('平均偏差角度:', valid_reg_loss / valid_step_temp)
++        else:
++            print('平均偏差角度: nan (no valid validation batches)')
++        print(f'skipped train invalid: {skipped_invalid_train}, skipped train non-finite: {skipped_nan_train}')
++        print(f'skipped val invalid: {skipped_invalid_val}, skipped val non-finite: {skipped_nan_val}')
+         print("============================================")
+ 
+         writer.add_scalar('Test Loss', lossL.item(), global_step=i)
+@@ -589,6 +776,10 @@ def train(args, model_name, device_ids, device):
+         #######################################################
+ 
+         train_loss = train_loss / train_step_temp
++        if valid_step_temp == 0:
++            print("no valid validation batches, skip epoch update")
++            scheduler.step()
++            continue
+         valid_loss = valid_loss / valid_step_temp
+         valid_class_loss = valid_class_loss / valid_step_temp
+         valid_reg_loss = valid_reg_loss / valid_step_temp
+@@ -599,21 +790,77 @@ def train(args, model_name, device_ids, device):
+         #######################################################
+         #Early Stopping
+         #######################################################
+-        
++
+ 
+         if train_seg:
+             r_loss = 2 - np.mean(seg_acc_list) - np.mean(centerline_acc_list)
+         else:
+             r_loss = valid_loss
+ 
+-        torch.save(model_train.state_dict(), MODEL_DIR  + str(epoch) + '_' + str(batch_size) + '/epoch_' + str(epoch) + '_batchsize_' + str(batch_size) + '.pth')
++        # Save true-epoch checkpoint and keep a legacy alias for inference compatibility.
++        ckpt_epoch_path = os.path.join(read_model_path, f'epoch_{i + 1}_batchsize_{batch_size}.pth')
++        ckpt_latest_alias = os.path.join(read_model_path, f'epoch_{epoch}_batchsize_{batch_size}.pth')
++        ckpt_final_alias = os.path.join(read_model_path, 'checkpoint_final.pth')
++        torch.save(model_train.state_dict(), ckpt_epoch_path)
++        if ckpt_latest_alias != ckpt_epoch_path:
++            torch.save(model_train.state_dict(), ckpt_latest_alias)
++        torch.save(model_train.state_dict(), ckpt_final_alias)
+ 
++        is_best = False
+         if r_loss <= r_loss_min: 
+             print('R loss decreased (%6f --> %6f).  Saving model ' % (r_loss_min, r_loss))
+-            torch.save(model_train.state_dict(), MODEL_DIR  + str(epoch) + '_' + str(batch_size) + '/epoch_' + str(epoch) + '_batchsize_' + str(batch_size) + '_best.pth')
++            best_epoch = i + 1
++            is_best = True
++            ckpt_best_epoch = os.path.join(read_model_path, f'epoch_{i + 1}_batchsize_{batch_size}_best.pth')
++            ckpt_best_alias = os.path.join(read_model_path, f'epoch_{epoch}_batchsize_{batch_size}_best.pth')
++            ckpt_best_fixed = os.path.join(read_model_path, 'checkpoint_best.pth')
++            torch.save(model_train.state_dict(), ckpt_best_epoch)
++            if ckpt_best_alias != ckpt_best_epoch:
++                torch.save(model_train.state_dict(), ckpt_best_alias)
++            torch.save(model_train.state_dict(), ckpt_best_fixed)
+             r_loss_min = r_loss
+ 
+         time_elapsed = time.time() - since
++        metrics_rows.append({
++            'epoch': i + 1,
++            'lr': lr_current,
++            'train_loss': float(train_loss),
++            'valid_loss': float(valid_loss),
++            'valid_class_loss': float(valid_class_loss),
++            'valid_reg_loss': float(valid_reg_loss),
++            'r_loss': float(r_loss),
++            'acc1': float(np.mean(class_acc_list1)),
++            'acc2': float(np.mean(class_acc_list2)),
++            'seg_acc': float(np.mean(seg_acc_list)),
++            'centerline_acc': float(np.mean(centerline_acc_list)),
++            'skipped_invalid_train': int(skipped_invalid_train),
++            'skipped_nan_train': int(skipped_nan_train),
++            'skipped_invalid_val': int(skipped_invalid_val),
++            'skipped_nan_val': int(skipped_nan_val),
++            'elapsed_sec': float(time.time() - training_start_ts),
++            'is_best': bool(is_best),
++            'early_stop_triggered': False,
++        })
++        write_metrics_snapshot()
++
++        # Early stopping (nnUNet-aligned defaults)
++        if (i + 1) >= early_stop_min_epochs:
++            if r_loss <= (r_loss_stop_min - early_stop_min_delta):
++                r_loss_stop_min = r_loss
++                early_stop_counter = 0
++            else:
++                early_stop_counter += 1
++            if early_stop_counter >= early_stop_patience:
++                print('Early stopping triggered (patience=%d, min_delta=%.6f). Best r_loss=%.6f' %
++                      (early_stop_patience, early_stop_min_delta, r_loss_stop_min))
++                early_stop_triggered = True
++                if metrics_rows:
++                    metrics_rows[-1]['early_stop_triggered'] = True
++                write_metrics_snapshot()
++                break
++
++        # Scheduler steps at end of epoch (after optimizer steps) to avoid LR order warning.
++        scheduler.step()
+         print('this epoch time: {:.0f}m {:.0f}s'.format(time_elapsed // 60, time_elapsed % 60))
+         n_iter += 1
+ 
+@@ -754,22 +1001,42 @@ def inference_segmentation(args, model_name, device_ids, device):
+         # 裁剪视网膜图像中圆外的部分
+         test_image_mask_root_dir = args.test_data_mask_path
+         test_image_mask_dir = test_image_mask_root_dir + image_name + '_mask_resize.tif' # for DRIVE
+-        # test_image_mask_dir = test_image_mask_root_dir + 'Image_' + test_img_dir.split("/")[-1].split(".")[0] + '.png' # for CHASEDB
++        if not os.path.exists(test_image_mask_dir):
++            # fallback for ROAD-style naming (<image>.tif)
++            test_image_mask_dir = test_image_mask_root_dir + image_name + '.tif'
+         img_mask_org = open_tif(test_image_mask_dir)
+         if np.max(img_mask_org)==255:
+             img_mask_org = img_mask_org/255
+-        
+-        _, h, w = img_mask_org.shape
+-        img_mask_org = img_mask_org.reshape(h, w)
++
++        if img_mask_org.ndim == 2:
++            img_mask_2d = img_mask_org
++        elif img_mask_org.ndim == 3:
++            if img_mask_org.shape[0] == 1:
++                img_mask_2d = img_mask_org[0]
++            elif img_mask_org.shape[-1] == 1:
++                img_mask_2d = img_mask_org[..., 0]
++            else:
++                img_mask_2d = img_mask_org[0]
++        else:
++            raise ValueError(f"Unsupported mask ndim: {img_mask_org.ndim} for {test_image_mask_dir}")
++
++        if img_mask_2d.shape != (h, w):
++            img_mask_2d = transform.resize(
++                img_mask_2d,
++                (h, w),
++                order=0,
++                preserve_range=True,
++                anti_aliasing=False
++            )
++
+         selem = morphology.disk(5*resize_radio)
+-        img_mask_org = morphology.binary_erosion(img_mask_org, selem)
+-        img_mask_org = img_mask_org.reshape(1, h, w)
++        img_mask_2d = morphology.binary_erosion(img_mask_2d, selem).astype(np.float32)
+ 
+ 
+         file_newname_lab = predict_centerline_path + image_name + '.pro.lab.tif' # for DRIVE
+         file_newname_skl = predict_centerline_path + image_name + '.pro.skl.tif'
+-        save_tif(shape_lab_image_new * img_mask_org, file_newname_lab, np.uint8)
+-        save_tif(shape_dis_image_new * img_mask_org, file_newname_skl, np.uint8)
++        save_tif(shape_lab_image_new * img_mask_2d, file_newname_lab, np.uint8)
++        save_tif(shape_dis_image_new * img_mask_2d, file_newname_skl, np.uint8)
+ 
+ 
+ def inference_fastdeepbranchtracer(args, model_name, device_ids, device):
+@@ -826,7 +1093,10 @@ def inference_fastdeepbranchtracer(args, model_name, device_ids, device):
+     #######################################################
+     #                tracing the image
+     #######################################################
+-    torch.multiprocessing.set_start_method('spawn')
++    try:
++        torch.multiprocessing.set_start_method('spawn')
++    except RuntimeError:
++        pass
+ 
+     device_info = [model_test, device]
+     data_info = [SHAPE, vector_bins]
+@@ -838,8 +1108,7 @@ def inference_fastdeepbranchtracer(args, model_name, device_ids, device):
+         # print(image_name)
+         # if image_name != '12':
+         #     continue
+-        if image_name != '07':
+-            continue
++        # Run all test slices; do not filter by hard-coded filename.
+         # if image_name != '02R':
+         #     print('pass:', image_name)
+         #     continue
+@@ -863,7 +1132,7 @@ def inference_fastdeepbranchtracer(args, model_name, device_ids, device):
+         th = 128 
+         stack_skl[stack_skl<th]=0
+         stack_skl[stack_skl>=th]=1
+-        stack_skl = morphology.skeletonize(stack_skl)//255
++        stack_skl = morphology.skeletonize(stack_skl > 0).astype(np.uint8)
+         
+         
+         # 设置追踪模式
+@@ -1117,7 +1386,10 @@ def inference_deepbranchtracer(args, model_name, device_ids, device):
+     #######################################################
+     #                tracing the image
+     #######################################################
+-    torch.multiprocessing.set_start_method('spawn')
++    try:
++        torch.multiprocessing.set_start_method('spawn')
++    except RuntimeError:
++        pass
+ 
+     device_info = [model_test, device]
+     data_info = [SHAPE, vector_bins]
+@@ -1175,17 +1447,51 @@ def inference_deepbranchtracer(args, model_name, device_ids, device):
+         # this code for cut the edge of segmentation
+         test_image_mask_root_dir = args.test_data_mask_path
+         test_image_mask_dir = test_image_mask_root_dir + image_name + '_mask_resize.tif' # for DRIVE
++        if not os.path.exists(test_image_mask_dir):
++            # fallback for ROAD-style naming (<image>.tif)
++            test_image_mask_dir = test_image_mask_root_dir + image_name + '.tif'
+         img_mask_org = open_tif(test_image_mask_dir)
+         if np.max(img_mask_org)==255:
+             img_mask_org = img_mask_org/255
+-        _, h, w = stack_lab.shape
++
++        if stack_lab.ndim == 3:
++            h, w = stack_lab.shape[-2], stack_lab.shape[-1]
++        elif stack_lab.ndim == 2:
++            h, w = stack_lab.shape
++        else:
++            raise ValueError(f"Unsupported stack_lab ndim: {stack_lab.ndim} for {stack_lab_dir}")
++
++        if img_mask_org.ndim == 2:
++            img_mask_2d = img_mask_org
++        elif img_mask_org.ndim == 3:
++            if img_mask_org.shape[0] == 1:
++                img_mask_2d = img_mask_org[0]
++            elif img_mask_org.shape[-1] == 1:
++                img_mask_2d = img_mask_org[..., 0]
++            else:
++                img_mask_2d = img_mask_org[0]
++        else:
++            raise ValueError(f"Unsupported mask ndim: {img_mask_org.ndim} for {test_image_mask_dir}")
++
++        if img_mask_2d.shape != (h, w):
++            img_mask_2d = transform.resize(
++                img_mask_2d,
++                (h, w),
++                order=0,
++                preserve_range=True,
++                anti_aliasing=False
++            )
++
+         selem = morphology.disk(5*resize_radio)
+-        img_mask_org = img_mask_org.reshape(h, w)
+-        img_mask_org = morphology.binary_erosion(img_mask_org, selem)
+-        img_mask_org = img_mask_org.reshape(1, h, w)
++        img_mask_2d = morphology.binary_erosion(img_mask_2d, selem).astype(np.float32)
++
++        if stack_lab.ndim == 3:
++            img_mask_apply = img_mask_2d.reshape(1, h, w)
++        else:
++            img_mask_apply = img_mask_2d
+ 
+-        stack_lab = stack_lab*img_mask_org
+-        stack_skl = stack_skl*img_mask_org
++        stack_lab = stack_lab * img_mask_apply
++        stack_skl = stack_skl * img_mask_apply
+         # print(np.max(stack_lab))
+         # print(np.max(stack_skl))        
+         # pause
+@@ -1197,7 +1503,7 @@ def inference_deepbranchtracer(args, model_name, device_ids, device):
+         stack_skl[stack_skl<th]=0
+         stack_skl[stack_skl>=th]=1
+         
+-        stack_skl = morphology.skeletonize(stack_skl)//255
++        stack_skl = morphology.skeletonize(stack_skl > 0).astype(np.uint8)
+         # stack_skl_dir = '/4T/liuchao/deepneutracing/deepbranchtracer_2d/ROAD/temp/pre_centerline_test/7-skl.tif'
+         # save_tif(stack_skl, stack_skl_dir, np.uint8)
+         # print(np.max(stack_skl))
+@@ -1412,11 +1718,19 @@ if __name__=='__main__':
+     #              load the config of model
+     #######################################################
+     args = config_2d.args
++    _set_global_seed(int(args.seed))
+ 
+     #######################################################
+     #              Checking if GPU is used
+     #######################################################
+-    device_ids = [0,1,2,3]
++    # Use single GPU by default to avoid invalid device ids on 1-GPU systems
++    if torch.cuda.is_available():
++        if args.gpu_id >= torch.cuda.device_count():
++            print('gpu_id out of range, fallback to 0')
++            args.gpu_id = 0
++        device_ids = [args.gpu_id]
++    else:
++        device_ids = []
+ 
+     train_on_gpu = torch.cuda.is_available()
+     if not train_on_gpu:
+@@ -1458,6 +1772,7 @@ if __name__=='__main__':
+     print('batch_size = ' + str(args.batch_size))
+     print('   epoch   = ' + str(args.epochs))
+     print('    bins   = ' + str(args.vector_bins))
++    print('    seed   = ' + str(args.seed))
+     print('================================================')
+     
+     train_or_test = str(args.train_or_test)
+@@ -1484,6 +1799,3 @@ if __name__=='__main__':
+ # python train_2D.py --gpu_id 0 --train_or_test inference_segmentation 
+ # python train_2D.py --gpu_id 0 --train_or_test inference_fastdeepbranchtracer
+ # python train_2D.py --gpu_id 0 --train_or_test inference_deepbranchtracer
+-
+-
+-

@@ -247,6 +247,7 @@
 - **错误类型归类**：训练日志按关键字归类（NaN/Inf、OOM、Missing file、RuntimeError 等），写入汇总 TSV。
 - **资源采样**：定期写 `nvidia-smi`、主机内存、进程 RSS、磁盘占用（`df -h`）到独立资源日志，定位 OOM/磁盘压力。
 - **训练侧异常捕获**：dataloader 初始化与训练/验证循环加入 try/except 记录异常；对标签 bin 越界/NaN/Inf 做检查并跳过该 batch；启用 `set_detect_anomaly` 与 `clip_grad_norm_` 降低梯度爆炸。
+- **监控开销**：默认 30s 采样间隔，主要为 `nvidia-smi`/`ps`/`free`/`df` 的轻量调用，对训练吞吐影响可忽略（通常 <1% CPU 开销）。
 - **产物清单**：
   - 主日志（统一进度）：`logs/deepbranchtracer_4fold_unified_*.log`
   - 汇总 TSV（状态/错误/退出码/PID）：`logs/deepbranchtracer_4fold_unified_*.tsv`

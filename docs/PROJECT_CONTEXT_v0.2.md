@@ -64,6 +64,13 @@
 - 现有标注：2D mask（可在 Z 维堆叠形成“伪 3D mask”）。
 - 已完整标注数据：约 4 个 Z-stack，~100 张 slice（数量级）。
 - 计划增强：从 2D mask 提取 2D centerline；结合“nonsupervised/半监督”扩大有效标注量。
+- 审核与导出（Annotations & Inference）：
+  - 采用 **review tracker**（xlsx）记录审阅状态与导出路径，按 `A/B/C` 分级。
+  - 若 raw / prediction 尺寸不一致，审阅加载时使用 **mask-grid**：raw 在内存中 **downsample/resample** 到 prediction 尺寸以便稳定叠加。
+  - 纠正后的 mask 统一保存为 **prediction grid**（与推理输入同尺寸），确保下游训练与推理一致。
+  - 导出 `review_final_masks/<GRADE>/...`：优先使用纠正后的 mask，否则使用原推理 mask。
+  - 纠正后的 mask 在 TIFF `ImageDescription` 中写入 JSON 元数据（raw/pred 路径、zstack id、shape 映射与重采样策略）。
+  - 该流程默认匹配 **downsampled dz**（与训练/推理一致的 dz），避免分辨率不一致导致的对齐偏差。
 
 风险提示：把 2D mask 简单堆叠成 3D GT 会引入“跨层一致性假设”，但 GT 本身并未约束跨层连通；评估 3D 重建时容易出现“模型把跨层连起来了，但其实 GT 没表达是否应连”的可解释性问题。需要单独设计 3D 评价策略（见第 5 节）。
 
@@ -95,6 +102,31 @@
 - **case 数量与来源**：生成 manifest，记录跳过/异常清单。
 
 若发现不一致或异常，必须先询问确认后再继续推理。
+
+### 2.8 统一阻断机制（Contract + Guarded Runner）
+
+为减少错跑、空跑、覆盖跑，训练/推理入口统一接入 **contract + guarded runner**：
+
+- 统一 runner：`scripts/nnunet_guarded_run.sh`
+- 适配器：
+  - nnUNet：`tools/guardrails/nnunet_preflight.py`
+  - DBT：`tools/guardrails/dbt_preflight.py`
+- 关键校验失败即阻断（hybrid 模式下）：
+  - nnUNet：`spacing/channels/split/nonempty`（以及可选 `overwrite`）
+  - DBT：`nonempty/dbt_structure/split`（以及可选 `overwrite`）
+- 统一可追溯日志：
+  - `preflight_report.json`
+  - `status.tsv`（含 `start/preflight_pass|fail/heartbeat/child_exit/script_exit`）
+  - 记录退出码与信号（SIGTERM/SIGINT）
+
+DBT 训练推荐入口改为：
+
+- `scripts/run_deepbranchtracer_4fold_train_guarded.sh`
+
+说明：
+
+- `required_channels` 不在系统中写死，按训练任务 contract 动态定义。
+- 新模型接入时必须先提供 adapter preflight，再接入同一 runner。
 
 ## 3. 已知成像/数据问题与影响机制（按“可观测性→学习难点→误差类型”拆解）
 
